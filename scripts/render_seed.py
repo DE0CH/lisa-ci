@@ -47,11 +47,12 @@ def main() -> None:
     keys_yaml = "\n".join(f'      - "{k}"' for k in keys)
 
     # Random, discarded: nobody knows this password; access is SSH + NOPASSWD
-    # sudo (see the sudoers late-command in the template).
-    throwaway = pysecrets.token_urlsafe(24)
+    # sudo (see the sudoers late-command in the template). Passed via stdin
+    # (never argv: a leading "-" would be parsed as an openssl option).
+    throwaway = pysecrets.token_hex(24)
     password_hash = subprocess.run(
-        ["openssl", "passwd", "-6", throwaway],
-        capture_output=True, text=True, check=True,
+        ["openssl", "passwd", "-6", "-stdin"],
+        input=throwaway, capture_output=True, text=True, check=True,
     ).stdout.strip()
 
     user_data = (ROOT / "seed" / "user-data.tmpl").read_text()
