@@ -51,7 +51,7 @@ jobs:
         with:
           name: lisa-test-iso
           path: lisa-test.iso
-          retention-days: 3
+          retention-days: 1
           compression-level: 0
 
       - name: Upload final ISO
@@ -61,7 +61,7 @@ jobs:
           path: |
             lisa-final.iso
             lisa-final.iso.sha256
-          retention-days: 14
+          retention-days: 5
           compression-level: 0
 
       - name: Upload per-run test key
@@ -71,7 +71,7 @@ jobs:
           path: |
             test_key
             test_key.pub
-          retention-days: 3
+          retention-days: 1
 
   test-install:
     needs: build
@@ -131,7 +131,7 @@ jobs:
         with:
           name: serial-logs-test-install
           path: serial-*.log
-          retention-days: 3
+          retention-days: 1
 
   test-final:
     # Serialized after test-install so the ephemeral test node has released
@@ -216,4 +216,4 @@ jobs:
         with:
           name: serial-logs-test-final
           path: serial-*.log
-          retention-days: 3
+          retention-days: 1
