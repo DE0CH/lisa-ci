@@ -1,0 +1,85 @@
+name: ts-connectivity
+
+# Manually-dispatched tailscale connectivity test. Installs the test ISO,
+# injects TS_AUTHKEY_SECRET (never baked into any artifact) into the booted
+# guest, verifies the in-guest join, then holds the VM online so an operator
+# can independently confirm the node's appearance on the tailnet — the
+# workflow itself has no tailnet-side view, by design.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hold_seconds:
+        description: "Keep the joined VM online this long for external confirmation"
+        default: "300"
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Cache pristine Ubuntu ISO
+        uses: actions/cache@v4
+        with:
+          path: iso
+          key: ubuntu-2604-live-server-amd64-v1
+
+      - name: Install QEMU + OVMF + xorriso
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 ovmf xorriso
+
+      - name: Fetch inputs (ISO, authorized keys, deb bundle)
+        run: python3 scripts/ci/fetch_inputs.py
+
+      - name: Generate per-run test SSH key
+        run: ssh-keygen -t ed25519 -N '' -C lisa-ci-test -f test_key -q
+
+      - name: Build test ISO (dummy baked credentials)
+        run: |
+          TS_AUTHKEY="tskey-dummy-injected-at-test-time" python3 scripts/render_seed.py --variant test --out seed-test
+          python3 scripts/build_iso.py test seed-test lisa-test.iso
+
+      - name: Unattended install (phase 1)
+        run: python3 scripts/ci/vm.py install lisa-test.iso
+
+      - name: First boot (phase 2)
+        run: python3 scripts/ci/vm.py boot
+
+      - name: Inject TS_AUTHKEY_SECRET (runtime only, never in artifacts)
+        env:
+          TS_AUTHKEY_SECRET: ${{ secrets.TS_AUTHKEY_SECRET }}
+        run: python3 scripts/ci/inject_tskey.py
+
+      - name: Verify installed system incl. in-guest tailscale join
+        env:
+          LISA_EXPECT_TS: "1"
+        run: python3 scripts/ci/run_verify.py
+
+      - name: Hold VM online for external tailnet confirmation
+        run: |
+          echo "Node should now be visible on the tailnet as lisa* (ephemeral key: it self-removes after going offline)."
+          sleep "${{ inputs.hold_seconds }}"
+
+      - name: Stop VM
+        if: always()
+        run: python3 scripts/ci/vm.py stop
+
+      - name: Upload serial logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-logs-ts-connectivity
+          path: serial-*.log
+          retention-days: 1

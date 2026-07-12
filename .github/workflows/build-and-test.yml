@@ -1,14 +1,17 @@
 name: build-and-test
 
+# Push-triggered pipeline. Never touches the tailnet: the test ISO carries a
+# dummy tailscale key (verified to keep retrying), and the release ISO is
+# booted with guest networking restricted so its baked key cannot fire.
+# Real tailscale connectivity is a separate, manually-dispatched workflow.
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# Test jobs create real (ephemeral) nodes named lisa* on the tailnet;
-# never let two runs race each other.
 concurrency:
-  group: tailnet-tests
+  group: pipeline
   cancel-in-progress: false
 
 jobs:
@@ -27,13 +30,6 @@ jobs:
       - name: Fetch inputs (ISO, authorized keys, deb bundle)
         run: python3 scripts/ci/fetch_inputs.py
 
-      - name: Refuse to bake real credentials into public-repo artifacts
-        env:
-          REPO_VISIBILITY: ${{ github.event.repository.visibility }}
-          TS_AUTHKEY_FINAL: ${{ secrets.TS_AUTHKEY_FINAL }}
-          EDUROAM_PASSWORD: ${{ secrets.EDUROAM_PASSWORD }}
-        run: python3 scripts/ci/guard_public_secrets.py
-
       - name: Generate per-run test SSH key
         run: ssh-keygen -t ed25519 -N '' -C lisa-ci-test -f test_key -q
 
@@ -42,15 +38,16 @@ jobs:
 
       - name: Render seeds and build both ISOs
         env:
-          PASSWORD_HASH: ${{ secrets.CONSOLE_PASSWORD_HASH }}
-          EDUROAM_IDENTITY: ${{ secrets.EDUROAM_IDENTITY }}
+          # Consumed only by the release (final) render. On the public repo
+          # these are dummies; artifacts stay credential-free there.
+          TS_AUTHKEY_RELEASE: ${{ secrets.TS_AUTHKEY_RELEASE }}
+          EDUROAM_USERNAME: ${{ secrets.EDUROAM_USERNAME }}
           EDUROAM_PASSWORD: ${{ secrets.EDUROAM_PASSWORD }}
-          TS_AUTHKEY_FINAL: ${{ secrets.TS_AUTHKEY_FINAL }}
         run: |
-          # Test ISO always gets a dummy key: the real CI test key is injected
-          # over SSH at test time and never lands in an artifact.
+          # Test ISO: dummy tailscale key + code-generated dummy eduroam
+          # credentials — no secrets involved at all.
           TS_AUTHKEY="tskey-dummy-injected-at-test-time" python3 scripts/render_seed.py --variant test --out seed-test
-          TS_AUTHKEY="$TS_AUTHKEY_FINAL" python3 scripts/render_seed.py --variant final --out seed-final
+          TS_AUTHKEY="$TS_AUTHKEY_RELEASE" python3 scripts/render_seed.py --variant final --out seed-final
           python3 scripts/build_iso.py test  seed-test  lisa-test.iso
           python3 scripts/build_iso.py final seed-final lisa-final.iso
 
@@ -62,7 +59,7 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-      - name: Upload final ISO
+      - name: Upload release ISO
         uses: actions/upload-artifact@v4
         with:
           name: lisa-final-iso
@@ -113,23 +110,10 @@ jobs:
       - name: First boot (phase 2)
         run: python3 scripts/ci/vm.py boot
 
-      - name: Inject CI tailscale key (never baked into artifacts)
-        env:
-          CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
-          TS_AUTHKEY_TEST: ${{ secrets.TS_AUTHKEY_TEST }}
-        run: python3 scripts/ci/inject_tskey.py
-
       - name: Verify installed system (in-guest)
-        env:
-          CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
-          TS_AUTHKEY_TEST: ${{ secrets.TS_AUTHKEY_TEST }}
         run: python3 scripts/ci/run_verify.py
 
       - name: eduroam WPA2-Enterprise handshake test (in-guest, detached)
-        env:
-          CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
-          EDUROAM_IDENTITY: ${{ secrets.EDUROAM_IDENTITY }}
-          EDUROAM_PASSWORD: ${{ secrets.EDUROAM_PASSWORD }}
         run: python3 scripts/ci/run_hwsim_detached.py
 
       - name: Stop VM
@@ -145,8 +129,6 @@ jobs:
           retention-days: 1
 
   test-final:
-    # Serialized after test-install so the ephemeral test node has released
-    # the "lisa" name before the final image joins.
     needs: [build, test-install]
     runs-on: ubuntu-latest
     timeout-minutes: 80
@@ -171,28 +153,16 @@ jobs:
           name: test-ssh-key
       - run: chmod 600 test_key
 
-      - name: Record run start (for tailnet device filtering)
-        run: echo "SINCE=$(date +%s)" >> "$GITHUB_ENV"
-
       - name: Unattended install (phase 1)
         run: python3 scripts/ci/vm.py install lisa-final.iso
 
-      - name: First boot (phase 2)
-        run: python3 scripts/ci/vm.py boot
+      - name: First boot (phase 2, guest networking restricted)
+        # restrict=on so the release image's baked tailscale key cannot fire
+        # from CI; real connectivity is the manually-dispatched workflow.
+        run: python3 scripts/ci/vm.py boot --restrict
 
       - name: Assert only de0ch.keys can log in (test key + password rejected)
         run: python3 scripts/ci/assert_ssh_locked.py
-
-      - name: Verify tailnet join via Tailscale API
-        env:
-          TS_API_TOKEN: ${{ secrets.TS_API_TOKEN }}
-        run: python3 scripts/ci/tailscale_api.py wait-join "$SINCE"
-
-      - name: Clean up CI tailnet node(s)
-        if: always()
-        env:
-          TS_API_TOKEN: ${{ secrets.TS_API_TOKEN }}
-        run: python3 scripts/ci/tailscale_api.py cleanup "$SINCE"
 
       - name: Stop VM
         if: always()

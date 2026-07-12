@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 """Run the in-guest eduroam test detached via systemd-run and poll for the
 verdict. Detached because the test triggers `netplan apply`, which can drop
-the very SSH session that launched it.
+the very SSH session that launched it. No credentials are passed: the in-guest
+test reads them out of the shipped /usr/local/sbin/lisa-wifi-setup itself.
 """
 import pathlib
-import shlex
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from util import GUEST, SSH_OPTS, env_required, log, ssh_sudo_shell
+from util import GUEST, SSH_OPTS, log, ssh_sudo_shell
 
 def main() -> None:
-    identity = env_required("EDUROAM_IDENTITY")
-    password = env_required("EDUROAM_PASSWORD")
-    console_pw = env_required("CONSOLE_PASSWORD")
-
     log("== upload test script ==")
     script = (pathlib.Path(__file__).parent / "hwsim_eduroam_test.py").read_text()
     r = subprocess.run(
@@ -27,14 +23,11 @@ def main() -> None:
         sys.exit("upload failed")
 
     log("== launch detached ==")
-    unit_cmd = (
-        "sudo -S -p '' systemd-run --no-block --unit=lisa-hwsim-test "
-        f"--setenv=EDUROAM_IDENTITY={shlex.quote(identity)} "
-        f"--setenv=EDUROAM_PASSWORD={shlex.quote(password)} "
-        "python3 /tmp/hwsim-test.py"
+    r = subprocess.run(
+        ["ssh", *SSH_OPTS, GUEST,
+         "sudo systemd-run --no-block --unit=lisa-hwsim-test python3 /tmp/hwsim-test.py"],
+        timeout=30,
     )
-    r = subprocess.run(["ssh", *SSH_OPTS, GUEST, unit_cmd],
-                       input=f"{console_pw}\n".encode(), timeout=30)
     if r.returncode != 0:
         sys.exit("systemd-run launch failed")
 

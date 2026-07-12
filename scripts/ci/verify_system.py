@@ -45,6 +45,10 @@ def main() -> None:
     chk("sshd_password_auth", "no", conf.get("passwordauthentication", "?"))
     chk("sshd_kbdint_auth", "no", conf.get("kbdinteractiveauthentication", "?"))
 
+    sudoers = pathlib.Path("/etc/sudoers.d/90-deyao")
+    chk("nopasswd_sudo", "deyao ALL=(ALL) NOPASSWD:ALL",
+        sudoers.read_text().strip() if sudoers.exists() else "missing")
+
     for pkg in ("wpasupplicant", "curl"):
         status = sh(f"dpkg-query -W -f='${{db:Status-Status}}' {pkg} 2>/dev/null")
         chk(f"{pkg}_installed", "installed", status)

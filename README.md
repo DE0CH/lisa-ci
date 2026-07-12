@@ -1,62 +1,55 @@
 # lisa-ci — unattended Ubuntu Server installer, built and tested by CI
 
-Every push to `main` (or manual dispatch) builds a bootable **Ubuntu Server
-26.04 autoinstall ISO** for the machine `lisa` and proves it works by actually
-installing it twice in QEMU/KVM on the GitHub runner.
+Every push to `main` builds a bootable **Ubuntu Server 26.04 autoinstall ISO**
+for the machine `lisa` and proves it works by installing it twice in QEMU/KVM
+on the GitHub runner. The `lisa-final-iso` artifact is the deliverable.
 
-## What the final ISO does when booted on a machine
+## What the release ISO does when booted on a machine
 1. Wipes the first disk and installs Ubuntu Server 26.04 — zero keyboard input.
-2. User `deyao`, hostname `lisa`, SSH key-only (keys from github.com/de0ch.keys),
-   password auth disabled, timezone Asia/Hong_Kong.
+2. User `deyao`, hostname `lisa`, timezone Asia/Hong_Kong. **SSH-key-only**
+   (keys from github.com/de0ch.keys): password auth disabled, the account
+   password is random and discarded at build time, sudo is passwordless
+   (cloud-image convention).
 3. Powers the machine off when done → **remove the USB, power back on**.
 4. First boot: connects to **eduroam** Wi-Fi (WPA2-Enterprise PEAP/MSCHAPv2,
    interface auto-detected) or wired DHCP, installs Tailscale, joins the
-   tailnet as `lisa`, then destroys the auth key on disk. Fully offline-capable
-   install (wpasupplicant/curl debs bundled on the ISO).
+   tailnet, then destroys the auth key on disk. The install is fully
+   offline-capable (wpasupplicant/curl debs bundled on the ISO).
 
-## Pipeline
+## Secrets (four)
+| Secret | Used by | Public repo | Private repo |
+|---|---|---|---|
+| `TS_AUTHKEY_RELEASE` | baked into the **release** ISO | dummy | real (reusable) |
+| `EDUROAM_USERNAME` | baked into the **release** ISO | dummy | real |
+| `EDUROAM_PASSWORD` | baked into the **release** ISO | dummy | real |
+| `TS_AUTHKEY_SECRET` | **runtime-injected** in the manual connectivity test; never in any artifact | real (ephemeral) | real (ephemeral) |
+
+The test ISO involves no secrets at all: it is built with a dummy tailscale
+key and **code-generated** dummy eduroam credentials; the eduroam test reads
+those back out of the shipped script inside the guest.
+
+## Workflows
+**`build-and-test`** (push) — never touches the tailnet:
 | Job | What it proves |
 |---|---|
-| `build` | ISO remaster reproducible from a pristine, checksum-verified Ubuntu ISO; secrets injected only at build time |
-| `test-install` | Full unattended install + first boot in KVM; identity/SSH posture/offline-deb checks; **real tailnet join** (ephemeral key, node self-removes); **real PEAP/MSCHAPv2 handshake** against a simulated eduroam AP (mac80211_hwsim + hostapd) using the shipped Wi-Fi payload |
-| `test-final` | The shipped artifact: installs, **rejects** the CI test key and password auth, and its tailnet join is confirmed via the Tailscale API; CI node deleted afterwards |
+| `build` | ISO remaster reproducible from a pristine, checksum-verified Ubuntu ISO |
+| `test-install` | Full unattended install + first boot in KVM; identity, SSH posture, NOPASSWD sudo, offline debs; join service in correct retry-pending state; **real PEAP/MSCHAPv2 handshake** against a simulated eduroam AP (mac80211_hwsim + hostapd) using the shipped Wi-Fi payload |
+| `test-final` | The release artifact installs and **rejects** everything but the de0ch.keys identity; booted with guest networking **restricted** so its baked key cannot fire from CI |
 
-Artifacts: `lisa-final-iso` (the deliverable, 5-day retention), `lisa-test-iso`,
-serial logs for debugging.
+**`ts-connectivity`** (manual dispatch) — the one test that touches the
+tailnet: installs the test ISO, injects `TS_AUTHKEY_SECRET` over SSH, verifies
+the in-guest join, and holds the VM online (`hold_seconds` input) so the
+operator can confirm the node's appearance on the tailnet from outside. The
+workflow deliberately has no tailnet-side view; confirmation is the operator's
+job. The key is ephemeral, so the node self-removes after the VM stops.
 
 ## Public code, private builds
-This code runs in two repos with identical content: a **public** one and a
-**private** mirror whose `lisa-final-iso` artifact is the actual deliverable.
-The rule is simple: **real credentials may live in CI secrets anywhere, but
-must never reach a downloadable artifact.** Concretely:
-
-- The test ISO is always built with a **dummy** Tailscale key; the real CI test
-  key (`TS_AUTHKEY_TEST`, an ephemeral key) is injected into the booted VM over
-  SSH at test time — so even the public repo runs the full, real tailnet-join
-  test, and no artifact ever contains it.
-- `TS_AUTHKEY_FINAL` is baked into the final ISO (that's its purpose), so it is
-  real **only in the private repo**; the public repo sets a dummy, making its
-  final-ISO artifact harmless. With a dummy, verification asserts the
-  retry-pending join state and the Tailscale API steps self-skip.
-- eduroam credentials are baked into both ISOs' Wi-Fi payload, so they are real
-  only in the private repo too; the PEAP/MSCHAPv2 handshake test works with
-  dummies (the simulated AP is loaded with the same values).
-
-**Artifacts on public repos are downloadable by anyone** — that's why baked
-secrets and public repos never mix.
-
-## Required repository secrets
-| Secret | Content |
-|---|---|
-| `TS_AUTHKEY_FINAL` | Reusable Tailscale auth key baked into the final ISO |
-| `TS_AUTHKEY_TEST` | Reusable **ephemeral** auth key for CI test installs |
-| `TS_API_TOKEN` | Tailscale API access token (verify + clean up final-test node; max 90-day lifetime) |
-| `EDUROAM_IDENTITY` / `EDUROAM_PASSWORD` | eduroam credentials |
-| `CONSOLE_PASSWORD` / `CONSOLE_PASSWORD_HASH` | console password for `deyao` (plaintext used by CI to sudo during in-guest verification; SHA-512 crypt hash baked into the seed) |
-
-Rotation: auth keys and the API token expire (see the Tailscale admin console →
-Settings → Keys). When a key expires, generate a new one, update the secret,
-re-run the workflow.
+Two repos, identical code. The public one carries dummy baked-credential
+secrets, so all of its artifacts are harmless; the private mirror carries the
+real ones and produces the actual release. **Artifacts on public repos are
+downloadable by anyone** — never set real baked credentials there. (The
+runtime-injected `TS_AUTHKEY_SECRET` is safe on both: it never enters an
+artifact.)
 
 ## Using the ISO
 Download the `lisa-final-iso` artifact and write it to a USB stick with any
@@ -65,6 +58,8 @@ scope for this repo — the deliverable is the verified ISO.
 
 ## Cautions
 - The installer wipes whatever machine you boot it on, without asking.
-- The eduroam handshake is tested against a simulated AP with the real
-  credentials; the institution's actual RADIUS server is the one untested hop.
-- The Wi-Fi config does not pin the institution CA certificate.
+- The eduroam handshake is tested against a simulated AP; the institution's
+  actual RADIUS server is the one untested hop. The Wi-Fi config does not pin
+  the institution CA certificate.
+- Auth keys expire (Tailscale admin console → Settings → Keys): rotate the
+  secret and re-run when they do.

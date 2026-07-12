@@ -33,6 +33,9 @@ autoinstall:
     # timezone module is unreliable on runners where cloud-init is disabled
     # post-install).
     - bash -c 'ln -sf /usr/share/zoneinfo/Asia/Hong_Kong /target/etc/localtime && echo Asia/Hong_Kong > /target/etc/timezone'
+    # Cloud-image convention: the account password is random and discarded at
+    # build time; access is SSH-key-only with passwordless sudo.
+    - bash -c 'printf "deyao ALL=(ALL) NOPASSWD:ALL\n" > /target/etc/sudoers.d/90-deyao && chmod 440 /target/etc/sudoers.d/90-deyao'
     - bash -c 'cp /cdrom/nocloud/payload/lisa-wifi-setup /target/usr/local/sbin/lisa-wifi-setup && chmod 755 /target/usr/local/sbin/lisa-wifi-setup'
     - bash -c 'cp /cdrom/nocloud/payload/lisa-wifi-setup.service /target/etc/systemd/system/lisa-wifi-setup.service && ln -sf /etc/systemd/system/lisa-wifi-setup.service /target/etc/systemd/system/multi-user.target.wants/lisa-wifi-setup.service'
     - bash -c 'if compgen -G "/cdrom/nocloud/debs/*.deb" > /dev/null; then mkdir -p /target/opt/lisa-debs && cp /cdrom/nocloud/debs/*.deb /target/opt/lisa-debs/ && curtin in-target --target=/target -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts=/dev/null /opt/lisa-debs/*.deb" && rm -rf /target/opt/lisa-debs; fi'

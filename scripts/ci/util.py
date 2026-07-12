@@ -1,4 +1,8 @@
-"""Shared helpers for the CI scripts (stdlib only)."""
+"""Shared helpers for the CI scripts (stdlib only).
+
+The installed system is SSH-key-only with passwordless sudo (cloud-image
+convention), so in-guest root execution needs no password plumbing.
+"""
 import os
 import subprocess
 import sys
@@ -33,29 +37,18 @@ def env_required(name: str) -> str:
     return v
 
 
-def ssh_sudo(script: str, args=(), timeout=120, extra_stdin: str = ""):
-    """Run `script` as root inside the guest via `sudo python3 -`.
-
-    stdin layout: first line is the console password (consumed by sudo -S),
-    the rest is the script text (consumed by python3 -), then EOF.
-    Returns the CompletedProcess (check is left to callers).
-    """
-    password = env_required("CONSOLE_PASSWORD")
-    remote = "sudo -S -p '' python3 - " + " ".join(str(a) for a in args)
-    payload = password + "\n" + script
-    if extra_stdin:
-        payload += "\n" + extra_stdin
+def ssh_sudo(script: str, args=(), timeout=120):
+    """Run a Python script as root inside the guest via `sudo python3 -`."""
+    remote = "sudo python3 - " + " ".join(str(a) for a in args)
     return subprocess.run(
         ["ssh", *SSH_OPTS, GUEST, remote],
-        input=payload.encode(), timeout=timeout,
+        input=script.encode(), timeout=timeout,
     )
 
 
-def ssh_sudo_shell(command: str, timeout=60, extra_stdin: str = ""):
-    """Run a single root shell command inside the guest (for systemctl etc.)."""
-    password = env_required("CONSOLE_PASSWORD")
-    payload = password + "\n" + extra_stdin
+def ssh_sudo_shell(command: str, timeout=60):
+    """Run a single root shell command inside the guest."""
     return subprocess.run(
-        ["ssh", *SSH_OPTS, GUEST, f"sudo -S -p '' {command}"],
-        input=payload.encode(), timeout=timeout, capture_output=True,
+        ["ssh", *SSH_OPTS, GUEST, f"sudo {command}"],
+        timeout=timeout, capture_output=True,
     )

@@ -3,10 +3,10 @@
 via systemd-run because it triggers `netplan apply`). Stands up a fake
 "eduroam" AP with a real WPA2-Enterprise EAP server (PEAP/MSCHAPv2) on one
 mac80211_hwsim radio, then lets the system's own lisa-wifi-setup service
-connect on the other radio. Credentials from EDUROAM_IDENTITY/EDUROAM_PASSWORD.
+connect on the other radio. Credentials from EDUROAM_USERNAME/EDUROAM_PASSWORD.
 """
-import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -28,9 +28,21 @@ def wifi_interfaces() -> list:
     )
 
 
+def shipped_credentials() -> tuple:
+    """Read the eduroam credentials out of the shipped Wi-Fi script, so the
+    fake AP always matches whatever the ISO was built with (code-generated
+    dummies for test builds — no secrets in the test path)."""
+    text = pathlib.Path("/usr/local/sbin/lisa-wifi-setup").read_text()
+    identity = re.search(r'identity: "([^"]+)"', text)
+    password = re.search(r'password: "([^"]+)"', text)
+    if not identity or not password:
+        sys.exit("could not parse credentials from /usr/local/sbin/lisa-wifi-setup")
+    return identity.group(1), password.group(1)
+
+
 def main() -> None:
-    identity = os.environ["EDUROAM_IDENTITY"]
-    password = os.environ["EDUROAM_PASSWORD"]
+    identity, password = shipped_credentials()
+    print(f"testing with shipped identity: {identity}", flush=True)
 
     print("== reset any previous attempt ==", flush=True)
     sh("pkill hostapd || true")

@@ -3,8 +3,13 @@
 
   vm.py install <iso>   boot the installer ISO against a fresh disk; the
                         autoinstall powers the VM off when done (qemu exits)
-  vm.py boot            boot the installed disk in the background with ssh
-                        forwarded to 127.0.0.1:2222; waits for sshd
+  vm.py boot [--restrict]
+                        boot the installed disk in the background with ssh
+                        forwarded to 127.0.0.1:2222; waits for sshd.
+                        --restrict blocks all guest-initiated traffic (QEMU
+                        slirp restrict=on): sshd stays reachable but the guest
+                        cannot reach the internet — used when booting the
+                        release image so its baked tailscale key cannot fire.
   vm.py stop            kill the background VM
 """
 import os
@@ -64,10 +69,13 @@ def cmd_install(iso: str) -> None:
     log("== installer powered off ==")
 
 
-def cmd_boot() -> None:
-    log("== booting installed system ==")
+def cmd_boot(restrict: bool = False) -> None:
+    log(f"== booting installed system (restrict={restrict}) ==")
+    netdev = f"user,id=n0,hostfwd=tcp:127.0.0.1:{SSH_PORT}-:22"
+    if restrict:
+        netdev += ",restrict=on"
     cmd = ["qemu-system-x86_64", *common_args("serial-boot.log"),
-           "-netdev", f"user,id=n0,hostfwd=tcp:127.0.0.1:{SSH_PORT}-:22",
+           "-netdev", netdev,
            "-device", "virtio-net-pci,netdev=n0"]
     log(f"+ {' '.join(cmd)} &")
     with open("qemu-boot.out", "wb") as out:
@@ -111,7 +119,7 @@ def main() -> None:
         case "install":
             cmd_install(sys.argv[2])
         case "boot":
-            cmd_boot()
+            cmd_boot(restrict="--restrict" in sys.argv[2:])
         case "stop":
             cmd_stop()
         case _:
