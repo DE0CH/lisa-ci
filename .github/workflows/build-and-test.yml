@@ -1,0 +1,219 @@
+name: build-and-test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Test jobs create real (ephemeral) nodes named lisa* on the tailnet;
+# never let two runs race each other.
+concurrency:
+  group: tailnet-tests
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache pristine Ubuntu ISO
+        uses: actions/cache@v4
+        with:
+          path: iso
+          key: ubuntu-2604-live-server-amd64-v1
+
+      - name: Fetch inputs (ISO, authorized keys, deb bundle)
+        run: bash scripts/ci/fetch-inputs.sh
+
+      - name: Generate per-run test SSH key
+        run: ssh-keygen -t ed25519 -N '' -C lisa-ci-test -f test_key -q
+
+      - name: Install xorriso
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso
+
+      - name: Render seeds and build both ISOs
+        env:
+          PASSWORD_HASH: ${{ secrets.CONSOLE_PASSWORD_HASH }}
+          EDUROAM_IDENTITY: ${{ secrets.EDUROAM_IDENTITY }}
+          EDUROAM_PASSWORD: ${{ secrets.EDUROAM_PASSWORD }}
+          TS_AUTHKEY_TEST: ${{ secrets.TS_AUTHKEY_TEST }}
+          TS_AUTHKEY_FINAL: ${{ secrets.TS_AUTHKEY_FINAL }}
+        run: |
+          TS_AUTHKEY="$TS_AUTHKEY_TEST"  python3 scripts/render-seed.py --variant test  --out seed-test
+          TS_AUTHKEY="$TS_AUTHKEY_FINAL" python3 scripts/render-seed.py --variant final --out seed-final
+          bash scripts/build-iso.sh test  seed-test  lisa-test.iso
+          bash scripts/build-iso.sh final seed-final lisa-final.iso
+
+      - name: Upload test ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: lisa-test-iso
+          path: lisa-test.iso
+          retention-days: 3
+          compression-level: 0
+
+      - name: Upload final ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: lisa-final-iso
+          path: |
+            lisa-final.iso
+            lisa-final.iso.sha256
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload per-run test key
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-ssh-key
+          path: |
+            test_key
+            test_key.pub
+          retention-days: 3
+
+  test-install:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install QEMU + OVMF
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 ovmf
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lisa-test-iso
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-ssh-key
+      - run: chmod 600 test_key
+
+      - name: Unattended install (phase 1)
+        run: bash scripts/ci/vm.sh install lisa-test.iso
+
+      - name: First boot (phase 2)
+        run: bash scripts/ci/vm.sh boot
+
+      - name: Verify installed system (in-guest)
+        env:
+          CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
+        run: |
+          { echo "$CONSOLE_PASSWORD"; cat scripts/ci/verify-system.sh; } | \
+            ssh -i test_key -p 2222 -o StrictHostKeyChecking=accept-new \
+                -o UserKnownHostsFile=known_hosts_vm -o BatchMode=yes \
+                deyao@127.0.0.1 "sudo -S -p '' bash -s -- 2"
+
+      - name: eduroam WPA2-Enterprise handshake test (in-guest, detached)
+        env:
+          CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
+          EDUROAM_IDENTITY: ${{ secrets.EDUROAM_IDENTITY }}
+          EDUROAM_PASSWORD: ${{ secrets.EDUROAM_PASSWORD }}
+        run: bash scripts/ci/run-hwsim-detached.sh
+
+      - name: Stop VM
+        if: always()
+        run: bash scripts/ci/vm.sh stop
+
+      - name: Upload serial logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-logs-test-install
+          path: serial-*.log
+          retention-days: 3
+
+  test-final:
+    # Serialized after test-install so the ephemeral test node has released
+    # the "lisa" name before the final image joins.
+    needs: [build, test-install]
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install QEMU + OVMF
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 ovmf
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lisa-final-iso
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-ssh-key
+      - run: chmod 600 test_key
+
+      - name: Record run start (for tailnet device filtering)
+        run: echo "SINCE=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Unattended install (phase 1)
+        run: bash scripts/ci/vm.sh install lisa-final.iso
+
+      - name: First boot (phase 2)
+        run: bash scripts/ci/vm.sh boot
+
+      - name: Assert test key is rejected
+        run: |
+          set +e
+          out=$(ssh -i test_key -p 2222 -o StrictHostKeyChecking=accept-new \
+                 -o UserKnownHostsFile=known_hosts_vm -o BatchMode=yes \
+                 -o ConnectTimeout=10 deyao@127.0.0.1 'echo BREACH' 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          if [ $rc -eq 0 ]; then echo "FAIL: test key was accepted by final image"; exit 1; fi
+          echo "$out" | grep -q 'Permission denied (publickey)' || { echo "FAIL: unexpected error"; exit 1; }
+          echo "PASS: test key rejected, publickey-only"
+
+      - name: Assert password auth is not offered
+        run: |
+          set +e
+          out=$(ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+                 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=known_hosts_vm \
+                 -o BatchMode=yes -o ConnectTimeout=10 deyao@127.0.0.1 'echo BREACH' 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          if [ $rc -eq 0 ]; then echo "FAIL: password auth path succeeded"; exit 1; fi
+          echo "$out" | grep -q 'Permission denied (publickey)' || { echo "FAIL: password auth appears enabled"; exit 1; }
+          echo "PASS: password authentication disabled"
+
+      - name: Verify tailnet join via Tailscale API
+        env:
+          TS_API_TOKEN: ${{ secrets.TS_API_TOKEN }}
+        run: bash scripts/ci/tailscale-api.sh wait-join "$SINCE"
+
+      - name: Clean up CI tailnet node(s)
+        if: always()
+        env:
+          TS_API_TOKEN: ${{ secrets.TS_API_TOKEN }}
+        run: bash scripts/ci/tailscale-api.sh cleanup "$SINCE"
+
+      - name: Stop VM
+        if: always()
+        run: bash scripts/ci/vm.sh stop
+
+      - name: Upload serial logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-logs-test-final
+          path: serial-*.log
+          retention-days: 3

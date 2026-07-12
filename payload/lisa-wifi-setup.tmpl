@@ -1,0 +1,31 @@
+#!/bin/sh
+# Detects the machine's Wi-Fi interface and generates a concrete netplan file
+# for eduroam. Needed because netplan's networkd backend cannot glob-match
+# Wi-Fi interfaces, and the interface name differs per machine.
+set -u
+wl=""
+for d in /sys/class/net/*; do
+  [ -d "$d/wireless" ] && { wl=$(basename "$d"); break; }
+done
+[ -n "$wl" ] || exit 0
+f=/etc/netplan/70-lisa-wifi.yaml
+if [ -f "$f" ] && grep -q "^    $wl:" "$f"; then
+  exit 0
+fi
+umask 077
+cat > "$f" <<EOF
+network:
+  version: 2
+  wifis:
+    $wl:
+      dhcp4: true
+      optional: true
+      access-points:
+        eduroam:
+          auth:
+            key-management: eap
+            method: peap
+            identity: "@EDUROAM_IDENTITY@"
+            password: "@EDUROAM_PASSWORD@"
+EOF
+netplan apply

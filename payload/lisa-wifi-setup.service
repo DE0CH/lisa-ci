@@ -1,0 +1,10 @@
+[Unit]
+Description=Generate eduroam netplan for the present Wi-Fi interface
+After=systemd-networkd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lisa-wifi-setup
+
+[Install]
+WantedBy=multi-user.target

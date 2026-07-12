@@ -1,0 +1,17 @@
+# build/test working files — never commit; some contain secrets
+*.iso
+*.iso.sha256
+*.qcow2
+serial-*.log
+ovmf_vars.fd
+qemu.pid
+qemu-boot.out
+known_hosts_vm
+iso/
+debs/
+seed-test/
+seed-final/
+de0ch.keys
+test_key
+test_key.pub
+__pycache__/
