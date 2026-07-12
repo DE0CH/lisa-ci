@@ -27,6 +27,13 @@ jobs:
       - name: Fetch inputs (ISO, authorized keys, deb bundle)
         run: python3 scripts/ci/fetch_inputs.py
 
+      - name: Refuse to bake real credentials into public-repo artifacts
+        env:
+          REPO_VISIBILITY: ${{ github.event.repository.visibility }}
+          TS_AUTHKEY_FINAL: ${{ secrets.TS_AUTHKEY_FINAL }}
+          EDUROAM_PASSWORD: ${{ secrets.EDUROAM_PASSWORD }}
+        run: python3 scripts/ci/guard_public_secrets.py
+
       - name: Generate per-run test SSH key
         run: ssh-keygen -t ed25519 -N '' -C lisa-ci-test -f test_key -q
 
