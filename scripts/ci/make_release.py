@@ -4,25 +4,21 @@
 Usage: make_release.py <run-number> <sha>
 Env:   GH_TOKEN (the workflow's github.token)
 
-GitHub caps release assets at 2 GiB, so the ISO is split into parts; the
-release notes carry the reassembly instructions.
+GitHub caps release assets at 2 GiB, so the ISO ships as a multipart 7z
+archive (store mode: the ISO is mostly compressed squashfs already; the 7z
+container adds native splitting + CRC integrity).
 """
 import pathlib
 import subprocess
 import sys
 
-PART_SIZE = 1900 * 1024 * 1024  # under the 2 GiB asset cap
-
 NOTES = """Fully CI-tested unattended Ubuntu Server 26.04 installer for lisa.
 
-Assets are split because GitHub caps release assets at 2 GiB. Reassemble:
+The ISO ships as a multipart 7z (GitHub caps release assets at 2 GiB).
+Extract with 7-Zip (open the .001 file), or:
 
-    # Linux / macOS / Git Bash
-    cat lisa-final.iso.part-* > lisa-final.iso
+    7z x lisa-final.7z.001
     sha256sum -c lisa-final.iso.sha256
-
-    # Windows cmd
-    copy /b lisa-final.iso.part-00+lisa-final.iso.part-01 lisa-final.iso
 
 Then write to USB with any raw imaging tool (dd / Rufus dd mode / balenaEtcher).
 Built from commit {sha}.
@@ -31,17 +27,13 @@ Built from commit {sha}.
 
 def main() -> None:
     run_number, sha = sys.argv[1], sys.argv[2]
-    iso = pathlib.Path("lisa-final.iso")
 
-    parts = []
-    with open(iso, "rb") as src:
-        idx = 0
-        while chunk := src.read(PART_SIZE):
-            part = pathlib.Path(f"lisa-final.iso.part-{idx:02d}")
-            part.write_bytes(chunk)
-            parts.append(str(part))
-            idx += 1
-    print(f"split into {len(parts)} parts", flush=True)
+    subprocess.run(
+        ["7z", "a", "-v1900m", "-mx=0", "lisa-final.7z", "lisa-final.iso"],
+        check=True,
+    )
+    parts = sorted(str(p) for p in pathlib.Path(".").glob("lisa-final.7z.*"))
+    print(f"multipart 7z: {parts}", flush=True)
 
     tag = f"build-{run_number}"
     subprocess.run(
