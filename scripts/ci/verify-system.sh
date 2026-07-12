@@ -5,6 +5,11 @@ set -uo pipefail
 
 EXPECT_KEYS="${1:?expected authorized_keys count}"
 fail=0
+
+# Settle first: timezone/runcmd are cloud-init stages that finish after sshd
+# is already accepting connections.
+echo "-- waiting for cloud-init to finish (up to 300s) --"
+timeout 300 cloud-init status --wait || echo "warn: cloud-init still running or errored"
 chk() { # chk <name> <expected> <actual>
   if [ "$2" = "$3" ]; then echo "PASS: $1 = $2"
   else echo "FAIL: $1 expected [$2] got [$3]"; fail=1; fi
@@ -37,6 +42,13 @@ case "$ts_ip" in
   *) echo "FAIL: tailscale did not join (ip=[$ts_ip])"
      journalctl -u lisa-tailscale-join --no-pager | tail -20; fail=1;;
 esac
+# The join script removes the key and disables itself moments after `tailscale
+# up` returns — poll for the settled end state rather than racing it.
+echo "-- waiting up to 60s for join cleanup --"
+for i in $(seq 1 12); do
+  [ ! -f /etc/lisa-tskey ] && [ "$(systemctl is-enabled lisa-tailscale-join.service)" = "disabled" ] && break
+  sleep 5
+done
 chk tailscale_key_removed missing "$([ -f /etc/lisa-tskey ] && echo present || echo missing)"
 chk join_service_disabled disabled "$(systemctl is-enabled lisa-tailscale-join.service)"
 
