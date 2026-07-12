@@ -21,9 +21,19 @@ installing it twice in QEMU/KVM on the GitHub runner.
 | `test-install` | Full unattended install + first boot in KVM; identity/SSH posture/offline-deb checks; **real tailnet join** (ephemeral key, node self-removes); **real PEAP/MSCHAPv2 handshake** against a simulated eduroam AP (mac80211_hwsim + hostapd) using the shipped Wi-Fi payload |
 | `test-final` | The shipped artifact: installs, **rejects** the CI test key and password auth, and its tailnet join is confirmed via the Tailscale API; CI node deleted afterwards |
 
-Artifacts: `lisa-final-iso` (the deliverable, 14-day retention), `lisa-test-iso`,
-serial logs for debugging. **Keep this repo private** — built ISOs embed the
-secrets below.
+Artifacts: `lisa-final-iso` (the deliverable, 5-day retention), `lisa-test-iso`,
+serial logs for debugging.
+
+## Public code, private builds
+This code runs in two repos with identical content: a **public** one whose
+secrets are dummies, and a **private** mirror whose secrets are real and whose
+`lisa-final-iso` artifact is the actual deliverable. The pipeline adapts to
+dummy credentials at runtime: a fake Tailscale key can't join, so verification
+asserts the retry-pending state instead (key kept, join service still enabled)
+and the Tailscale API steps no-op — everything else (unattended install, SSH
+posture, offline debs, the PEAP/MSCHAPv2 eduroam handshake) is fully exercised
+either way. Real secrets belong only in the private repo: **artifacts on public
+repos are downloadable by anyone**, and ISOs built from real secrets embed them.
 
 ## Required repository secrets
 | Secret | Content |

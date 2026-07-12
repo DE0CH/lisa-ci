@@ -108,11 +108,13 @@ jobs:
       - name: Verify installed system (in-guest)
         env:
           CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
+          TS_AUTHKEY_TEST: ${{ secrets.TS_AUTHKEY_TEST }}
         run: |
+          case "$TS_AUTHKEY_TEST" in tskey-auth-*) EXPECT_TS=1;; *) EXPECT_TS=0;; esac
           { echo "$CONSOLE_PASSWORD"; cat scripts/ci/verify-system.sh; } | \
             ssh -i test_key -p 2222 -o StrictHostKeyChecking=accept-new \
                 -o UserKnownHostsFile=known_hosts_vm -o BatchMode=yes \
-                deyao@127.0.0.1 "sudo -S -p '' bash -s -- 2"
+                deyao@127.0.0.1 "sudo -S -p '' bash -s -- 2 $EXPECT_TS"
 
       - name: eduroam WPA2-Enterprise handshake test (in-guest, detached)
         env:

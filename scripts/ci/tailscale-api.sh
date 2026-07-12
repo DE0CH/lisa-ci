@@ -10,6 +10,10 @@
 set -euo pipefail
 
 : "${TS_API_TOKEN:?}"
+case "$TS_API_TOKEN" in
+  tskey-api-*) ;;
+  *) echo "SKIP: TS_API_TOKEN is not a real API token (dummy-secret repo)"; exit 0 ;;
+esac
 API=https://api.tailscale.com/api/v2
 
 list_ci_nodes() { # $1 = since epoch; prints "id hostname created" per line
