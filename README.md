@@ -58,14 +58,10 @@ Rotation: auth keys and the API token expire (see the Tailscale admin console �
 Settings → Keys). When a key expires, generate a new one, update the secret,
 re-run the workflow.
 
-## Flashing the ISO to a USB stick (Windows, elevated)
-```powershell
-# download the lisa-final-iso artifact, then:
-powershell -File flash\flash-usb.ps1 -IsoPath lisa-final.iso -DiskNumber <N>
-```
-The script refuses any disk that is not USB-attached, not named Verbatim, or
-larger than 64 GB; it writes the partition table last (avoids Windows
-auto-mount corruption) and verifies with a full read-back SHA256.
+## Using the ISO
+Download the `lisa-final-iso` artifact and write it to a USB stick with any
+raw imaging tool (`dd`, Rufus in dd mode, balenaEtcher). Flashing is out of
+scope for this repo — the deliverable is the verified ISO.
 
 ## Cautions
 - The installer wipes whatever machine you boot it on, without asking.

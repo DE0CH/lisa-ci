@@ -25,7 +25,7 @@ jobs:
           key: ubuntu-2604-live-server-amd64-v1
 
       - name: Fetch inputs (ISO, authorized keys, deb bundle)
-        run: bash scripts/ci/fetch-inputs.sh
+        run: python3 scripts/ci/fetch_inputs.py
 
       - name: Generate per-run test SSH key
         run: ssh-keygen -t ed25519 -N '' -C lisa-ci-test -f test_key -q
@@ -42,10 +42,10 @@ jobs:
         run: |
           # Test ISO always gets a dummy key: the real CI test key is injected
           # over SSH at test time and never lands in an artifact.
-          TS_AUTHKEY="tskey-dummy-injected-at-test-time" python3 scripts/render-seed.py --variant test --out seed-test
-          TS_AUTHKEY="$TS_AUTHKEY_FINAL" python3 scripts/render-seed.py --variant final --out seed-final
-          bash scripts/build-iso.sh test  seed-test  lisa-test.iso
-          bash scripts/build-iso.sh final seed-final lisa-final.iso
+          TS_AUTHKEY="tskey-dummy-injected-at-test-time" python3 scripts/render_seed.py --variant test --out seed-test
+          TS_AUTHKEY="$TS_AUTHKEY_FINAL" python3 scripts/render_seed.py --variant final --out seed-final
+          python3 scripts/build_iso.py test  seed-test  lisa-test.iso
+          python3 scripts/build_iso.py final seed-final lisa-final.iso
 
       - name: Upload test ISO
         uses: actions/upload-artifact@v4
@@ -101,38 +101,33 @@ jobs:
       - run: chmod 600 test_key
 
       - name: Unattended install (phase 1)
-        run: bash scripts/ci/vm.sh install lisa-test.iso
+        run: python3 scripts/ci/vm.py install lisa-test.iso
 
       - name: First boot (phase 2)
-        run: bash scripts/ci/vm.sh boot
+        run: python3 scripts/ci/vm.py boot
 
       - name: Inject CI tailscale key (never baked into artifacts)
         env:
           CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
           TS_AUTHKEY_TEST: ${{ secrets.TS_AUTHKEY_TEST }}
-        run: bash scripts/ci/inject-tskey.sh
+        run: python3 scripts/ci/inject_tskey.py
 
       - name: Verify installed system (in-guest)
         env:
           CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
           TS_AUTHKEY_TEST: ${{ secrets.TS_AUTHKEY_TEST }}
-        run: |
-          case "$TS_AUTHKEY_TEST" in tskey-auth-*) EXPECT_TS=1;; *) EXPECT_TS=0;; esac
-          { echo "$CONSOLE_PASSWORD"; cat scripts/ci/verify-system.sh; } | \
-            ssh -i test_key -p 2222 -o StrictHostKeyChecking=accept-new \
-                -o UserKnownHostsFile=known_hosts_vm -o BatchMode=yes \
-                deyao@127.0.0.1 "sudo -S -p '' bash -s -- 2 $EXPECT_TS"
+        run: python3 scripts/ci/run_verify.py
 
       - name: eduroam WPA2-Enterprise handshake test (in-guest, detached)
         env:
           CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
           EDUROAM_IDENTITY: ${{ secrets.EDUROAM_IDENTITY }}
           EDUROAM_PASSWORD: ${{ secrets.EDUROAM_PASSWORD }}
-        run: bash scripts/ci/run-hwsim-detached.sh
+        run: python3 scripts/ci/run_hwsim_detached.py
 
       - name: Stop VM
         if: always()
-        run: bash scripts/ci/vm.sh stop
+        run: python3 scripts/ci/vm.py stop
 
       - name: Upload serial logs
         if: always()
@@ -173,51 +168,28 @@ jobs:
         run: echo "SINCE=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Unattended install (phase 1)
-        run: bash scripts/ci/vm.sh install lisa-final.iso
+        run: python3 scripts/ci/vm.py install lisa-final.iso
 
       - name: First boot (phase 2)
-        run: bash scripts/ci/vm.sh boot
+        run: python3 scripts/ci/vm.py boot
 
-      - name: Assert test key is rejected
-        run: |
-          set +e
-          out=$(ssh -i test_key -p 2222 -o StrictHostKeyChecking=accept-new \
-                 -o UserKnownHostsFile=known_hosts_vm -o BatchMode=yes \
-                 -o ConnectTimeout=10 deyao@127.0.0.1 'echo BREACH' 2>&1)
-          rc=$?
-          set -e
-          echo "$out"
-          if [ $rc -eq 0 ]; then echo "FAIL: test key was accepted by final image"; exit 1; fi
-          echo "$out" | grep -q 'Permission denied (publickey)' || { echo "FAIL: unexpected error"; exit 1; }
-          echo "PASS: test key rejected, publickey-only"
-
-      - name: Assert password auth is not offered
-        run: |
-          set +e
-          out=$(ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-                 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=known_hosts_vm \
-                 -o BatchMode=yes -o ConnectTimeout=10 deyao@127.0.0.1 'echo BREACH' 2>&1)
-          rc=$?
-          set -e
-          echo "$out"
-          if [ $rc -eq 0 ]; then echo "FAIL: password auth path succeeded"; exit 1; fi
-          echo "$out" | grep -q 'Permission denied (publickey)' || { echo "FAIL: password auth appears enabled"; exit 1; }
-          echo "PASS: password authentication disabled"
+      - name: Assert only de0ch.keys can log in (test key + password rejected)
+        run: python3 scripts/ci/assert_ssh_locked.py
 
       - name: Verify tailnet join via Tailscale API
         env:
           TS_API_TOKEN: ${{ secrets.TS_API_TOKEN }}
-        run: bash scripts/ci/tailscale-api.sh wait-join "$SINCE"
+        run: python3 scripts/ci/tailscale_api.py wait-join "$SINCE"
 
       - name: Clean up CI tailnet node(s)
         if: always()
         env:
           TS_API_TOKEN: ${{ secrets.TS_API_TOKEN }}
-        run: bash scripts/ci/tailscale-api.sh cleanup "$SINCE"
+        run: python3 scripts/ci/tailscale_api.py cleanup "$SINCE"
 
       - name: Stop VM
         if: always()
-        run: bash scripts/ci/vm.sh stop
+        run: python3 scripts/ci/vm.py stop
 
       - name: Upload serial logs
         if: always()

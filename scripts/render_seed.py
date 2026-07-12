@@ -4,7 +4,7 @@
 Literal string replacement (no shell/envsubst) so values containing $, /, &
 etc. (crypt hashes, passwords) cannot be mangled.
 
-Usage: render-seed.py --variant test|final --out <dir>
+Usage: render_seed.py --variant test|final --out <dir>
 Env:   PASSWORD_HASH, TS_AUTHKEY, EDUROAM_IDENTITY, EDUROAM_PASSWORD
 Files: de0ch.keys (fetched by CI), test_key.pub (test variant only)
 """
