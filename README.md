@@ -25,15 +25,25 @@ Artifacts: `lisa-final-iso` (the deliverable, 5-day retention), `lisa-test-iso`,
 serial logs for debugging.
 
 ## Public code, private builds
-This code runs in two repos with identical content: a **public** one whose
-secrets are dummies, and a **private** mirror whose secrets are real and whose
-`lisa-final-iso` artifact is the actual deliverable. The pipeline adapts to
-dummy credentials at runtime: a fake Tailscale key can't join, so verification
-asserts the retry-pending state instead (key kept, join service still enabled)
-and the Tailscale API steps no-op — everything else (unattended install, SSH
-posture, offline debs, the PEAP/MSCHAPv2 eduroam handshake) is fully exercised
-either way. Real secrets belong only in the private repo: **artifacts on public
-repos are downloadable by anyone**, and ISOs built from real secrets embed them.
+This code runs in two repos with identical content: a **public** one and a
+**private** mirror whose `lisa-final-iso` artifact is the actual deliverable.
+The rule is simple: **real credentials may live in CI secrets anywhere, but
+must never reach a downloadable artifact.** Concretely:
+
+- The test ISO is always built with a **dummy** Tailscale key; the real CI test
+  key (`TS_AUTHKEY_TEST`, an ephemeral key) is injected into the booted VM over
+  SSH at test time — so even the public repo runs the full, real tailnet-join
+  test, and no artifact ever contains it.
+- `TS_AUTHKEY_FINAL` is baked into the final ISO (that's its purpose), so it is
+  real **only in the private repo**; the public repo sets a dummy, making its
+  final-ISO artifact harmless. With a dummy, verification asserts the
+  retry-pending join state and the Tailscale API steps self-skip.
+- eduroam credentials are baked into both ISOs' Wi-Fi payload, so they are real
+  only in the private repo too; the PEAP/MSCHAPv2 handshake test works with
+  dummies (the simulated AP is loaded with the same values).
+
+**Artifacts on public repos are downloadable by anyone** — that's why baked
+secrets and public repos never mix.
 
 ## Required repository secrets
 | Secret | Content |

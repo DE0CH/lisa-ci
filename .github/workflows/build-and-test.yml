@@ -38,10 +38,11 @@ jobs:
           PASSWORD_HASH: ${{ secrets.CONSOLE_PASSWORD_HASH }}
           EDUROAM_IDENTITY: ${{ secrets.EDUROAM_IDENTITY }}
           EDUROAM_PASSWORD: ${{ secrets.EDUROAM_PASSWORD }}
-          TS_AUTHKEY_TEST: ${{ secrets.TS_AUTHKEY_TEST }}
           TS_AUTHKEY_FINAL: ${{ secrets.TS_AUTHKEY_FINAL }}
         run: |
-          TS_AUTHKEY="$TS_AUTHKEY_TEST"  python3 scripts/render-seed.py --variant test  --out seed-test
+          # Test ISO always gets a dummy key: the real CI test key is injected
+          # over SSH at test time and never lands in an artifact.
+          TS_AUTHKEY="tskey-dummy-injected-at-test-time" python3 scripts/render-seed.py --variant test --out seed-test
           TS_AUTHKEY="$TS_AUTHKEY_FINAL" python3 scripts/render-seed.py --variant final --out seed-final
           bash scripts/build-iso.sh test  seed-test  lisa-test.iso
           bash scripts/build-iso.sh final seed-final lisa-final.iso
@@ -104,6 +105,12 @@ jobs:
 
       - name: First boot (phase 2)
         run: bash scripts/ci/vm.sh boot
+
+      - name: Inject CI tailscale key (never baked into artifacts)
+        env:
+          CONSOLE_PASSWORD: ${{ secrets.CONSOLE_PASSWORD }}
+          TS_AUTHKEY_TEST: ${{ secrets.TS_AUTHKEY_TEST }}
+        run: bash scripts/ci/inject-tskey.sh
 
       - name: Verify installed system (in-guest)
         env:
