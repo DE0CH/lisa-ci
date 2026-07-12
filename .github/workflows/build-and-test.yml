@@ -175,3 +175,22 @@ jobs:
           name: serial-logs-test-final
           path: serial-*.log
           retention-days: 1
+
+  release:
+    # Publishes the verified ISO to the repo's Releases section (split into
+    # <2 GiB parts). On the public repo this publishes the dummy-credential
+    # demo build; the private mirror's release is the real deliverable.
+    needs: [build, test-install, test-final]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: lisa-final-iso
+      - name: Create GitHub Release with split ISO
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/make_release.py "${{ github.run_number }}" "${{ github.sha }}"
