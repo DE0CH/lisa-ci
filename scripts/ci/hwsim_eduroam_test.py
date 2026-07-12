@@ -51,7 +51,10 @@ def main() -> None:
     sh("rmmod mac80211_hwsim 2>/dev/null || true")
 
     print("== harness tools ==", flush=True)
-    sh("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq hostapd iw > /dev/null", check=True)
+    # DPkg::Lock::Timeout: the join service may be apt-installing tailscale
+    # concurrently on first boot (it retries with the dummy key) — wait for it.
+    sh("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq"
+       " -o DPkg::Lock::Timeout=300 hostapd iw > /dev/null", check=True)
     sh("systemctl stop hostapd; systemctl disable hostapd 2>/dev/null || true")
 
     print("== load virtual radios ==", flush=True)
